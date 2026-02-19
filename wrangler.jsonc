@@ -1,9 +1,12 @@
-name = "360iapdf"
-main = "src/index.ts"
-compatibility_date = "2024-03-14"
-
-# ESTO ES LO MÁS IMPORTANTE:
-[[d1_databases]]
-binding = "DB"
-database_name = "360ia_db"
-database_id = "dbd33d93-6f20-4f3e-965d-d0c946005765"
+{
+  "name": "360iapdf",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-03-14",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "360ia_db",
+      "database_id": "dbd33d93-6f20-4f3e-965d-d0c946005765"
+    }
+  ]
+}
