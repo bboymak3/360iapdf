@@ -4,24 +4,28 @@ export interface Env {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // 1. Cabeceras CORS para que el Dashboard (HTML) pueda comunicarse con este Worker
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     };
 
-    // Manejo de Preflight para CORS
+    // Responder a peticiones de control (Preflight)
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders });
     }
 
+    // Solo aceptamos POST para guardar datos
     if (request.method !== "POST") {
       return new Response("Método no permitido", { status: 405, headers: corsHeaders });
     }
 
     try {
-      const { widgetId, nuevoContenido, fuente } = await request.json() as any;
+      const body = await request.json() as any;
+      const { widgetId, nuevoContenido, fuente } = body;
 
+      // Validación de datos recibidos
       if (!widgetId || !nuevoContenido) {
         return new Response(JSON.stringify({ error: "Faltan datos requeridos" }), { 
           status: 400, 
@@ -29,44 +33,37 @@ export default {
         });
       }
 
-      // 1. Obtener el contexto actual para no borrarlo
+      // 2. Obtener el contexto actual de la Base de Datos
       const registro = await env.DB.prepare(
-        `SELECT contexto_entrenamiento FROM "360ia_db" WHERE widget_id = ?`
+        "SELECT contexto_entrenamiento FROM 360ia_db WHERE widget_id = ?"
       ).bind(widgetId).first();
 
       if (!registro) {
-        return new Response(JSON.stringify({ error: "Widget ID no encontrado" }), { 
+        return new Response(JSON.stringify({ error: "Widget no encontrado" }), { 
           status: 404, 
-          headers: corsHeaders 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
         });
       }
 
-      // 2. Preparar la nueva información con separadores claros para la IA
-      const timestamp = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
-      const bloqueNuevo = `
-\n\n--- NUEVA INFORMACIÓN CARGADA (${fuente}) - ${timestamp} ---
-${nuevoContenido.trim()}
-----------------------------------------------------------\n`;
+      // 3. Unir la información vieja con la nueva
+      const fecha = new Date().toLocaleDateString();
+      const bloqueNuevo = `\n\n=== NUEVO CONOCIMIENTO (${fuente} - ${fecha}) ===\n${nuevoContenido}\n`;
+      const contextoFinal = (registro.contexto_entrenamiento || "") + bloqueNuevo;
 
-      const nuevoContextoTotal = (registro.contexto_entrenamiento as string) + bloqueNuevo;
-
-      // 3. Actualizar la base de datos (haciendo el "Appender")
+      // 4. Guardar en la base de datos
       await env.DB.prepare(
-        `UPDATE "360ia_db" SET contexto_entrenamiento = ? WHERE widget_id = ?`
-      ).bind(nuevoContextoTotal, widgetId).run();
+        "UPDATE 360ia_db SET contexto_entrenamiento = ? WHERE widget_id = ?"
+      ).bind(contextoFinal, widgetId).run();
 
-      return new Response(JSON.stringify({ 
-        success: true, 
-        message: "Información integrada al cerebro correctamente",
-        fuente: fuente
-      }), {
+      return new Response(JSON.stringify({ success: true, message: "Cerebro actualizado" }), {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
 
     } catch (err: any) {
       return new Response(JSON.stringify({ error: err.message }), { 
         status: 500, 
-        headers: corsHeaders 
+        headers: { ...corsHeaders, "Content-Type": "application/json" } 
       });
     }
   }
