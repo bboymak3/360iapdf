@@ -1,104 +1,73 @@
-/**
- * LLM Chat Application Template
- *
- * A simple chat application using Cloudflare Workers AI.
- * This template demonstrates how to implement an LLM-powered chat interface with
- * streaming responses using Server-Sent Events (SSE).
- *
- * @license MIT
- */
-import { Env, ChatMessage } from "./types";
-
-// Model ID for Workers AI model
-// https://developers.cloudflare.com/workers-ai/models/
-const MODEL_ID = "@cf/meta/llama-3.1-8b-instruct-fp8";
-
-// Default system prompt
-const SYSTEM_PROMPT =
-	"You are a helpful, friendly assistant. Provide concise and accurate responses.";
+export interface Env {
+  DB: D1Database;
+}
 
 export default {
-	/**
-	 * Main request handler for the Worker
-	 */
-	async fetch(
-		request: Request,
-		env: Env,
-		ctx: ExecutionContext,
-	): Promise<Response> {
-		const url = new URL(request.url);
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
 
-		// Handle static assets (frontend)
-		if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
-			return env.ASSETS.fetch(request);
-		}
+    // Manejo de Preflight para CORS
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
 
-		// API Routes
-		if (url.pathname === "/api/chat") {
-			// Handle POST requests for chat
-			if (request.method === "POST") {
-				return handleChatRequest(request, env);
-			}
+    if (request.method !== "POST") {
+      return new Response("Método no permitido", { status: 405, headers: corsHeaders });
+    }
 
-			// Method not allowed for other request types
-			return new Response("Method not allowed", { status: 405 });
-		}
+    try {
+      const { widgetId, nuevoContenido, fuente } = await request.json() as any;
 
-		// Handle 404 for unmatched routes
-		return new Response("Not found", { status: 404 });
-	},
-} satisfies ExportedHandler<Env>;
+      if (!widgetId || !nuevoContenido) {
+        return new Response(JSON.stringify({ error: "Faltan datos requeridos" }), { 
+          status: 400, 
+          headers: { ...corsHeaders, "Content-Type": "application/json" } 
+        });
+      }
 
-/**
- * Handles chat API requests
- */
-async function handleChatRequest(
-	request: Request,
-	env: Env,
-): Promise<Response> {
-	try {
-		// Parse JSON request body
-		const { messages = [] } = (await request.json()) as {
-			messages: ChatMessage[];
-		};
+      // 1. Obtener el contexto actual para no borrarlo
+      const registro = await env.DB.prepare(
+        `SELECT contexto_entrenamiento FROM "360ia_db" WHERE widget_id = ?`
+      ).bind(widgetId).first();
 
-		// Add system prompt if not present
-		if (!messages.some((msg) => msg.role === "system")) {
-			messages.unshift({ role: "system", content: SYSTEM_PROMPT });
-		}
+      if (!registro) {
+        return new Response(JSON.stringify({ error: "Widget ID no encontrado" }), { 
+          status: 404, 
+          headers: corsHeaders 
+        });
+      }
 
-		const stream = await env.AI.run(
-			MODEL_ID,
-			{
-				messages,
-				max_tokens: 1024,
-				stream: true,
-			},
-			{
-				// Uncomment to use AI Gateway
-				// gateway: {
-				//   id: "YOUR_GATEWAY_ID", // Replace with your AI Gateway ID
-				//   skipCache: false,      // Set to true to bypass cache
-				//   cacheTtl: 3600,        // Cache time-to-live in seconds
-				// },
-			},
-		);
+      // 2. Preparar la nueva información con separadores claros para la IA
+      const timestamp = new Date().toLocaleString('es-VE', { timeZone: 'America/Caracas' });
+      const bloqueNuevo = `
+\n\n--- NUEVA INFORMACIÓN CARGADA (${fuente}) - ${timestamp} ---
+${nuevoContenido.trim()}
+----------------------------------------------------------\n`;
 
-		return new Response(stream, {
-			headers: {
-				"content-type": "text/event-stream; charset=utf-8",
-				"cache-control": "no-cache",
-				connection: "keep-alive",
-			},
-		});
-	} catch (error) {
-		console.error("Error processing chat request:", error);
-		return new Response(
-			JSON.stringify({ error: "Failed to process request" }),
-			{
-				status: 500,
-				headers: { "content-type": "application/json" },
-			},
-		);
-	}
-}
+      const nuevoContextoTotal = (registro.contexto_entrenamiento as string) + bloqueNuevo;
+
+      // 3. Actualizar la base de datos (haciendo el "Appender")
+      await env.DB.prepare(
+        `UPDATE "360ia_db" SET contexto_entrenamiento = ? WHERE widget_id = ?`
+      ).bind(nuevoContextoTotal, widgetId).run();
+
+      return new Response(JSON.stringify({ 
+        success: true, 
+        message: "Información integrada al cerebro correctamente",
+        fuente: fuente
+      }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+
+    } catch (err: any) {
+      return new Response(JSON.stringify({ error: err.message }), { 
+        status: 500, 
+        headers: corsHeaders 
+      });
+    }
+  }
+};
